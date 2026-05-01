@@ -1,0 +1,428 @@
+{% extends 'routes/base.html' %}
+{% load static route_filters %}
+
+{% block title %}Rota #{{ session.id|stringformat:"s"|slice:":8" }} — CCO{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  #mapa-leaflet { width:100%; height:520px; border-radius:8px; background:#e8ede9; }
+  .leaflet-popup-content-wrapper {
+    background: #1a2e28; color: #e0ede8; border: 1px solid #2e4a42;
+    border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  }
+  .leaflet-popup-tip { background: #1a2e28; }
+  .leaflet-popup-content { font-family: 'Rubik', sans-serif; font-size: .85rem; line-height: 1.5; }
+  .popup-ordem { font-size: .7rem; color: #e07b39; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  .popup-addr  { font-size: .85rem; color: #e0ede8; margin-top: 2px; }
+  .marker-pin {
+    width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: #e07b39; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.5);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .marker-pin span { transform: rotate(45deg); color: #fff; font-size: .7rem; font-weight: 700; }
+  .marker-pin-origin { background: #22c55e; }
+  @media(max-width:600px){ #mapa-leaflet { height: 350px; } }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="header-card">
+  <div>
+    <div class="header-title">
+      🗺️ Rota #{{ session.id|stringformat:"s"|slice:":8"|upper }}
+      {% if session.is_optimized %}
+        <span class="badge-otimizado">✔ Otimizada</span>
+      {% endif %}
+    </div>
+    <div class="header-sub">
+      {{ session.created_at|date:"d/m/Y H:i" }}
+      {% if session.origin_address %}&nbsp;|&nbsp; Partida: {{ session.origin_address|truncatechars:50 }}{% endif %}
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <a href="{% url 'routes:index' %}" class="btn-secondary" style="text-decoration:none">➕ Nova Rota</a>
+  </div>
+</div>
+
+<!-- Métricas -->
+<div class="metricas-grid">
+  <div class="metrica-card">
+    <div class="metrica-label">Distância Total</div>
+    <div class="metrica-valor">{{ session.total_distance_km|default:"—" }}{% if session.total_distance_km %} km{% endif %}</div>
+  </div>
+  <div class="metrica-card">
+    <div class="metrica-label">Tempo Estimado</div>
+    <div class="metrica-valor" id="tempo-estimado">
+      {{ session.total_duration_min|duration_fmt }}
+    </div>
+  </div>
+  <div class="metrica-card">
+    <div class="metrica-label">Combustível Est.</div>
+    <div class="metrica-valor">{{ session.fuel_liters|default:"—" }}{% if session.fuel_liters %} L{% endif %}</div>
+  </div>
+  <div class="metrica-card">
+    <div class="metrica-label">Custo Est.</div>
+    <div class="metrica-valor">{% if session.fuel_cost %}R$ {{ session.fuel_cost|floatformat:2 }}{% else %}—{% endif %}</div>
+  </div>
+  <div class="metrica-card">
+    <div class="metrica-label">Paradas</div>
+    <div class="metrica-valor">{{ points_count }}</div>
+  </div>
+  <div class="metrica-card">
+    <div class="metrica-label">Cons. / Preço</div>
+    <div class="metrica-valor" style="font-size:.9rem">{{ session.fuel_consumption }} km/L · R$ {{ session.fuel_price|floatformat:2 }}</div>
+  </div>
+</div>
+
+<!-- Erros de geocodificação -->
+{% if error_points %}
+<div class="alert alert-warning">
+  ⚠️ {{ error_points|length }} endereço(s) não puderam ser geocodificados:
+  {% for p in error_points %}
+    <br>• <code>{{ p.address }}</code> — {{ p.geocode_error }}
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- Ações -->
+<div class="ciclo-panel">
+  <div class="subtabs" id="subtabs">
+    <button class="subtab-btn active" data-tab="mapa" onclick="trocarTab('mapa', this)">🗺️ Mapa</button>
+    <button class="subtab-btn" data-tab="lista" onclick="trocarTab('lista', this)">📋 Lista</button>
+    <button class="subtab-btn" data-tab="nav" onclick="trocarTab('nav', this)">📱 Navegação</button>
+  </div>
+
+  <!-- Barra de botões de ação -->
+  <div class="add-colab-bar">
+    {% if not session.is_optimized %}
+    <button class="btn-primary" id="btn-otimizar" onclick="otimizarRota()">
+      ⚡ Otimizar Rota (OR-Tools)
+    </button>
+    {% else %}
+    <span style="color:#7fff90;font-size:.85rem;font-weight:600">✔ Rota otimizada</span>
+    {% endif %}
+
+    {% if geocoded_points %}
+    <a href="{% url 'routes:navigate' session.id %}" class="btn-primary"
+       style="text-decoration:none;background:linear-gradient(90deg,#00b0cc,#009ab5)">
+      🧭 Iniciar Navegação
+    </a>
+    {% endif %}
+
+    <a href="{% url 'routes:export_pdf' session.id %}" class="btn-secondary" style="text-decoration:none">
+      📥 Baixar PDF
+    </a>
+
+    <button class="btn-secondary" id="btn-copiar-link" onclick="copiarLink()">
+      🔗 Copiar Link
+    </button>
+
+    <span id="otimizando-msg" style="display:none;color:var(--muted);font-size:.85rem">
+      ⏳ Otimizando com OR-Tools...
+    </span>
+  </div>
+
+  <!-- TAB: MAPA -->
+  <div id="tab-mapa" class="subtab-panel">
+    {% if geocoded_points %}
+    <div class="mapa-wrap">
+      <div id="mapa-leaflet"></div>
+    </div>
+    {% else %}
+    <p class="hint">Nenhum ponto geocodificado para exibir no mapa.</p>
+    {% endif %}
+  </div>
+
+  <!-- TAB: LISTA -->
+  <div id="tab-lista" class="subtab-panel" style="display:none">
+    <div class="tabela-wrap">
+      <table class="tabela-est">
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th style="text-align:left">Endereço</th>
+            <th>Coord.</th>
+            <th>Dist. próx.</th>
+            <th>Tempo próx.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in points %}
+          <tr>
+            <td><strong style="color:var(--laranja)">{{ p.order }}</strong></td>
+            <td style="text-align:left">
+              <div style="font-weight:600;color:var(--claro)">{{ p.formatted_address|default:p.address }}</div>
+              {% if p.formatted_address and p.formatted_address != p.address %}
+              <div style="font-size:10px;color:var(--muted)">{{ p.address|truncatechars:50 }}</div>
+              {% endif %}
+              {% if not p.geocoded %}
+              <div style="font-size:10px;color:#ff6b6b">✖ Não geocodificado</div>
+              {% endif %}
+            </td>
+            <td style="font-size:10px;color:var(--muted)">
+              {% if p.lat %}{{ p.lat|floatformat:5 }},<br>{{ p.lng|floatformat:5 }}{% else %}—{% endif %}
+            </td>
+            <td>{% if p.distance_to_next_km %}{{ p.distance_to_next_km }} km{% else %}—{% endif %}</td>
+            <td>{% if p.duration_to_next_min %}{{ p.duration_to_next_min|floatformat:0 }} min{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: NAVEGAÇÃO -->
+  <div id="tab-nav" class="subtab-panel" style="display:none">
+
+    <!-- ── Google Maps — rota completa ───────────────────────────────────── -->
+    <div class="nav-card" style="margin-bottom:14px">
+      <div class="nav-card-title">🗺️ Google Maps — Rota Completa</div>
+      <div class="nav-card-desc">
+        Abre a rota inteira com todas as paradas em sequência no Google Maps.
+        {% if points_count > 10 %}
+        <br><span style="color:var(--laranja);font-size:.8rem">⚠️ O Google Maps exibe no máximo 10 paradas por URL — considere dividir a rota.</span>
+        {% endif %}
+      </div>
+      {% if google_maps_link %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <a href="{{ google_maps_link }}" target="_blank" class="btn-primary" style="text-decoration:none;text-align:center">
+          🗺️ Abrir no Google Maps
+        </a>
+        <button class="btn-secondary" onclick="copiarUrl('link-google', this)" style="font-size:.85rem">📋 Copiar link</button>
+      </div>
+      <div class="link-box" id="link-google" style="margin-top:8px">{{ google_maps_link }}</div>
+      {% else %}
+      <p class="hint">Sem pontos geocodificados para gerar o link.</p>
+      {% endif %}
+    </div>
+
+    <!-- ── Waze — navegação parada a parada ──────────────────────────────── -->
+    <div class="nav-card" style="margin-bottom:14px">
+      <div class="nav-card-title">🚗 Waze — Parada a Parada</div>
+      <div class="nav-card-desc">
+        O Waze não suporta múltiplos destinos via link. Toque em cada parada na ordem para navegar sequencialmente.
+      </div>
+      {% if waze_stops %}
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+        {% for stop in waze_stops %}
+          {% if stop.is_origin %}
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px">
+            <span style="color:#22c55e;font-size:.8rem;font-weight:700;min-width:24px">★</span>
+            <span style="font-size:.82rem;color:var(--muted);flex:1">{{ stop.label|truncatechars:60 }}</span>
+            <span style="font-size:.72rem;color:var(--muted)">Partida</span>
+          </div>
+          {% else %}
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--fundo);border:1px solid var(--borda);border-radius:6px">
+            <span style="color:var(--laranja);font-size:.8rem;font-weight:700;min-width:24px">{{ stop.order }}</span>
+            <span style="font-size:.82rem;color:var(--claro);flex:1">{{ stop.label|truncatechars:60 }}</span>
+            <a href="{{ stop.url }}" target="_blank"
+               style="text-decoration:none;background:linear-gradient(90deg,#00b0cc,#009ab5);color:#fff;padding:4px 10px;border-radius:5px;font-size:.78rem;font-weight:600;white-space:nowrap">
+              🚗 Waze
+            </a>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="hint">Sem pontos geocodificados para gerar os links.</p>
+      {% endif %}
+    </div>
+
+    <!-- ── Link para o motorista ──────────────────────────────────────────── -->
+    {% if google_maps_link %}
+    <div class="painel-form">
+      <div style="color:var(--laranja);font-weight:600;margin-bottom:6px">📱 Compartilhar com o Motorista</div>
+      <p style="color:var(--muted);font-size:.85rem;margin:0 0 8px">
+        Cole o link abaixo no WhatsApp ou e-mail — abre a rota completa no Google Maps do celular.
+      </p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <code style="background:var(--card);border:1px solid var(--borda);border-radius:6px;padding:8px 12px;color:var(--claro);font-size:.78rem;flex:1;word-break:break-all">{{ google_maps_link }}</code>
+        <button class="btn-secondary" onclick="copiarUrl('link-google', this)">📋 Copiar</button>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const SESSION_ID = "{{ session.id }}";
+const URLS = {
+  optimize:  "{% url 'routes:optimize' session.id %}",
+  regioes:   "{% url 'routes:regioes' %}",
+  csrfToken: "{{ csrf_token }}",
+};
+const ROUTE_POINTS = {{ points_json|safe }};
+const ROUTE_ORIGIN = {{ origin_json|safe }};
+
+// ── Mapa Leaflet ─────────────────────────────────────────────────────────────
+let _leafletMap = null;
+
+function initMap() {
+  if (_leafletMap) return; // já inicializado
+  const container = document.getElementById('mapa-leaflet');
+  if (!container) return;
+  if (!ROUTE_POINTS || ROUTE_POINTS.length === 0) return;
+  if (typeof L === 'undefined') { console.error('Leaflet não carregou.'); return; }
+
+  // Centro inicial: média das coordenadas dos pontos
+  const avgLat = ROUTE_POINTS.reduce((s, p) => s + p.lat, 0) / ROUTE_POINTS.length;
+  const avgLng = ROUTE_POINTS.reduce((s, p) => s + p.lng, 0) / ROUTE_POINTS.length;
+
+  _leafletMap = L.map('mapa-leaflet', { zoomControl: true }).setView([avgLat, avgLng], 13);
+
+  // Tile layer CartoDB Light (igual ao Buscador-Django)
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(_leafletMap);
+
+  // ── Contornos das regionais ──────────────────────────────────────────────
+  fetch(URLS.regioes)
+    .then(r => r.json())
+    .then(geojson => {
+      L.geoJSON(geojson, {
+        style: function(feature) {
+          return {
+            color: feature.properties.cor || '#e07b39',
+            weight: 2.5,
+            fillOpacity: 0.06,
+            fillColor: feature.properties.cor || '#e07b39',
+            dashArray: '6 4',
+          };
+        },
+        onEachFeature: function(feature, layer) {
+          if (feature.properties && feature.properties.nome) {
+            layer.bindTooltip(feature.properties.nome, {
+              permanent: false, direction: 'center',
+              className: 'tooltip-regional',
+            });
+            layer.on('mouseover', function() { this.setStyle({ fillOpacity: 0.15, weight: 3.5 }); });
+            layer.on('mouseout',  function() { this.setStyle({ fillOpacity: 0.06, weight: 2.5 }); });
+          }
+        },
+      }).addTo(_leafletMap);
+    })
+    .catch(() => {});
+
+  // ── Ícone numerado ────────────────────────────────────────────────────────
+  function createIcon(label, isOrigin) {
+    const cls = isOrigin ? 'marker-pin marker-pin-origin' : 'marker-pin';
+    return L.divIcon({
+      className: '',
+      html: `<div class="${cls}"><span>${label}</span></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 28],
+      popupAnchor: [0, -30],
+    });
+  }
+
+  const allLatLngs = [];
+
+  // ── Ponto de partida ──────────────────────────────────────────────────────
+  if (ROUTE_ORIGIN) {
+    const ll = [ROUTE_ORIGIN.lat, ROUTE_ORIGIN.lng];
+    allLatLngs.push(ll);
+    L.marker(ll, { icon: createIcon('★', true) })
+      .bindPopup(`<div class="popup-ordem">Ponto de Partida</div><div class="popup-addr">${ROUTE_ORIGIN.label}</div>`)
+      .addTo(_leafletMap);
+  }
+
+  // ── Paradas ───────────────────────────────────────────────────────────────
+  ROUTE_POINTS.forEach(function(pt) {
+    const ll = [pt.lat, pt.lng];
+    allLatLngs.push(ll);
+    L.marker(ll, { icon: createIcon(pt.order, false) })
+      .bindPopup(`<div class="popup-ordem">Parada ${pt.order}</div><div class="popup-addr">${pt.label}</div>`)
+      .addTo(_leafletMap);
+  });
+
+  // ── Linha da rota ─────────────────────────────────────────────────────────
+  if (allLatLngs.length >= 2) {
+    L.polyline(allLatLngs, { color: '#e07b39', weight: 3, opacity: 0.8, dashArray: '8 4' }).addTo(_leafletMap);
+  }
+
+  // Ajusta zoom para caber todos os pontos
+  if (allLatLngs.length > 0) {
+    _leafletMap.fitBounds(L.latLngBounds(allLatLngs), { padding: [40, 40] });
+  }
+}
+
+// Inicializa no load da página
+window.addEventListener('load', initMap);
+
+function trocarTab(tab, btn) {
+  document.querySelectorAll('.subtab-panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).style.display = 'block';
+  btn.classList.add('active');
+
+  if (tab === 'mapa') {
+    if (_leafletMap) {
+      setTimeout(() => _leafletMap.invalidateSize(), 50);
+    } else {
+      setTimeout(initMap, 50);
+    }
+  }
+}
+
+async function otimizarRota() {
+  const btn = document.getElementById('btn-otimizar');
+  const msg = document.getElementById('otimizando-msg');
+  btn.disabled = true;
+  btn.textContent = '⏳ Otimizando...';
+  msg.style.display = 'inline';
+
+  try {
+    const resp = await fetch(URLS.optimize, {
+      method: 'POST',
+      headers: { 'X-CSRFToken': URLS.csrfToken, 'Content-Type': 'application/json' },
+    });
+    const data = await resp.json();
+
+    if (data.ok) {
+      window.location.reload();
+    } else {
+      alert('Erro ao otimizar: ' + (data.error || 'Erro desconhecido'));
+      btn.disabled = false;
+      btn.textContent = '⚡ Otimizar Rota (OR-Tools)';
+      msg.style.display = 'none';
+    }
+  } catch(e) {
+    alert('Erro de conexão: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = '⚡ Otimizar Rota (OR-Tools)';
+    msg.style.display = 'none';
+  }
+}
+
+function copiarTexto(elementId, btn) {
+  const texto = document.getElementById(elementId).textContent.trim();
+  navigator.clipboard.writeText(texto).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✔ Copiado!';
+    setTimeout(() => btn.textContent = orig, 2000);
+  });
+}
+
+function copiarUrl(elementId, btn) {
+  copiarTexto(elementId, btn);
+}
+
+function copiarLink() {
+  navigator.clipboard.writeText(window.location.href).then(() => {
+    const btn = document.getElementById('btn-copiar-link');
+    btn.textContent = '✔ Copiado!';
+    setTimeout(() => btn.textContent = '🔗 Copiar Link', 2000);
+  });
+}
+</script>
+{% endblock %}

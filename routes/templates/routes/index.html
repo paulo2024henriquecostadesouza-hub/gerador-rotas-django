@@ -1,0 +1,294 @@
+{% extends 'routes/base.html' %}
+{% load static %}
+
+{% block title %}Nova Rota — CCO{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="header-card">
+  <div>
+    <div class="header-title">Gerador e Otimizador de Rotas</div>
+    <div class="header-sub">GPS, endereço ou coordenadas como partida + endereços das paradas</div>
+  </div>
+  <div class="header-year">
+    <div style="font-size:.75rem;color:rgba(255,255,255,.7)">Sistema</div>
+    <div style="font-size:1.6rem;font-weight:700">CCO</div>
+  </div>
+</div>
+
+<!-- Formulário principal -->
+<div class="ciclo-panel">
+  <form method="post" action="{% url 'routes:create' %}" id="form-rota">
+    {% csrf_token %}
+
+    <!-- ── Ponto de Partida ─────────────────────────────────────────────── -->
+    <div class="form-group" style="margin-bottom:0">
+      <label style="margin-bottom:6px">📍 Ponto de Partida</label>
+
+      <!-- Seletor de modo -->
+      <div class="subtabs" style="margin-bottom:10px" id="origin-tabs">
+        <button type="button" class="subtab-btn active" data-mode="gps"      onclick="selecionarModoOrigem('gps',      this)">📡 GPS Atual</button>
+        <button type="button" class="subtab-btn"        data-mode="address"  onclick="selecionarModoOrigem('address',  this)">🔍 Digitar Endereço</button>
+        <button type="button" class="subtab-btn"        data-mode="coords"   onclick="selecionarModoOrigem('coords',   this)">🎯 Coordenadas</button>
+      </div>
+
+      <!-- Campo oculto para indicar o modo selecionado -->
+      <input type="hidden" name="origin_mode" id="origin_mode" value="gps">
+
+      <!-- MODO GPS -->
+      <div id="painel-gps" style="background:var(--fundo);border:1px solid var(--borda);border-radius:8px;padding:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="flex:1">
+            <div id="loc-status" style="font-weight:600;color:var(--claro)">Aguardando localização...</div>
+            <div id="loc-address" style="font-size:.8rem;color:var(--muted);margin-top:2px"></div>
+          </div>
+          <button type="button" class="btn-secondary" id="btn-atualizar-loc" onclick="obterLocalizacao()">🔄 Atualizar</button>
+        </div>
+        <div id="loc-precisao" style="display:none;font-size:.75rem;color:var(--muted);margin-top:6px">
+          Precisão: <span id="loc-precisao-val"></span> metros
+        </div>
+        <!-- Campos ocultos GPS -->
+        <input type="hidden" name="origin_lat" id="origin_lat" value="">
+        <input type="hidden" name="origin_lng" id="origin_lng" value="">
+      </div>
+
+      <!-- MODO ENDEREÇO -->
+      <div id="painel-address" style="display:none">
+        <input type="text" name="origin_address_text" id="origin_address_text"
+               placeholder="Ex: Av. Paulista, 1000, São Paulo  ou  -23.5505,-46.6333"
+               style="width:100%;box-sizing:border-box"
+               value="{{ form_data.origin_address_text|default:'' }}">
+        <div class="hint" style="margin-top:4px">
+          Formatos aceitos:<br>
+          • <code style="color:var(--claro)">Rua X, 100, São Paulo, SP, Brasil</code> — geocodificação automática<br>
+          • <code style="color:var(--claro)">Rua X, 100, São Paulo, SP, Brasil&nbsp;&nbsp;-23.6066,-46.5928</code> — endereço + coordenadas (separados por TAB)<br>
+          • <code style="color:var(--claro)">-23.6066,-46.5928</code> — somente coordenadas
+        </div>
+      </div>
+
+      <!-- MODO COORDENADAS -->
+      <div id="painel-coords" style="display:none">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="form-group" style="margin-bottom:0">
+            <label style="font-size:.75rem">Latitude</label>
+            <input type="number" name="origin_coord_lat" id="origin_coord_lat"
+                   placeholder="-23.550520" step="0.000001" min="-90" max="90"
+                   value="{{ form_data.origin_coord_lat|default:'' }}">
+          </div>
+          <div class="form-group" style="margin-bottom:0">
+            <label style="font-size:.75rem">Longitude</label>
+            <input type="number" name="origin_coord_lng" id="origin_coord_lng"
+                   placeholder="-46.633309" step="0.000001" min="-180" max="180"
+                   value="{{ form_data.origin_coord_lng|default:'' }}">
+          </div>
+        </div>
+        <span class="hint">Use o formato decimal, ex: -23.550520, -46.633309 (Google Maps / GPS).</span>
+      </div>
+    </div>
+
+    <hr style="border-color:var(--borda);margin:16px 0">
+
+    <!-- Paradas -->
+    <div class="form-group">
+      <label>Paradas — cole os endereços (um por linha) *</label>
+      <textarea
+        name="addresses"
+        id="addresses"
+        rows="10"
+        placeholder="Avenida Paulista, 1000, São Paulo, SP, Brasil&#10;Avenida Paulista, 1000, São Paulo, SP, Brasil&#9;-23.5613,-46.6558&#10;-23.6066,-46.5928&#10;..."
+        required>{{ form_data.addresses }}</textarea>
+      <div class="hint" style="margin-top:4px">
+        Um endereço por linha. Mínimo 1, máximo 25 paradas.<br>
+        Formatos aceitos por linha: só endereço · endereço<kbd>TAB</kbd>lat,lng · só lat,lng
+      </div>
+    </div>
+
+    <!-- Configurações de combustível -->
+    <div class="top-controls" style="grid-template-columns:1fr 1fr">
+      <div class="form-group">
+        <label>Consumo médio (km/L)</label>
+        <input type="number" name="fuel_consumption" id="fuel_consumption"
+               value="{{ form_data.fuel_consumption|default:default_consumption }}"
+               min="1" max="50" step="0.5">
+      </div>
+      <div class="form-group">
+        <label>Preço do litro (R$)</label>
+        <input type="number" name="fuel_price" id="fuel_price"
+               value="{{ form_data.fuel_price|default:default_fuel_price }}"
+               min="1" max="20" step="0.10">
+      </div>
+    </div>
+
+    <!-- Botões -->
+    <div class="action-btns" style="border-top:1px solid var(--borda);padding-top:14px">
+      <button type="submit" class="btn-primary" id="btn-gerar">
+        🗺️ Gerar Rota
+      </button>
+      <button type="button" class="btn-secondary" onclick="limparForm()">
+        🗑️ Limpar
+      </button>
+      <span id="loading-msg" style="display:none;color:var(--muted);font-size:.85rem">
+        ⏳ Geocodificando paradas... pode levar alguns segundos.
+      </span>
+    </div>
+
+    <!-- Aviso de localização não obtida -->
+    <div id="aviso-sem-loc" style="display:none;background:rgba(193,106,66,.15);border-left:3px solid var(--laranja);border-radius:6px;padding:8px 12px;font-size:.85rem;color:var(--claro)">
+      ⚠️ Localização ainda não obtida. A rota será gerada sem ponto de partida fixo.
+    </div>
+  </form>
+</div>
+
+<!-- Instruções -->
+<div class="ciclo-panel" style="gap:8px">
+  <div style="color:var(--laranja);font-weight:600;font-size:.9rem">Como funciona</div>
+  <div class="legendas">
+    <div class="legenda-item" style="background:var(--fundo);color:var(--claro);border-color:var(--borda);min-width:auto;padding:8px 14px;text-align:left">
+      <strong style="color:var(--laranja)">1</strong><br><span>Sua localização atual é detectada automaticamente como partida</span>
+    </div>
+    <div class="legenda-item" style="background:var(--fundo);color:var(--claro);border-color:var(--borda);min-width:auto;padding:8px 14px;text-align:left">
+      <strong style="color:var(--laranja)">2</strong><br><span>Cole as paradas (endereços de entrega/coleta)</span>
+    </div>
+    <div class="legenda-item" style="background:var(--fundo);color:var(--fundo);border-color:var(--borda);min-width:auto;padding:8px 14px;text-align:left">
+      <strong style="color:var(--laranja)">3</strong><br><span>Clique em Gerar Rota e visualize no mapa</span>
+    </div>
+    <div class="legenda-item" style="background:var(--fundo);color:var(--claro);border-color:var(--borda);min-width:auto;padding:8px 14px;text-align:left">
+      <strong style="color:var(--laranja)">4</strong><br><span>Otimize a ordem e abra no Google Maps / Waze</span>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let _locObtida = false;
+let _modoAtual = 'gps';
+
+// ── Seletor de modo de origem ─────────────────────────────────────────────
+function selecionarModoOrigem(modo, btn) {
+  _modoAtual = modo;
+  document.getElementById('origin_mode').value = modo;
+
+  // Atualiza botões
+  document.querySelectorAll('#origin-tabs .subtab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  // Mostra o painel correto
+  document.getElementById('painel-gps').style.display     = modo === 'gps'     ? 'block' : 'none';
+  document.getElementById('painel-address').style.display = modo === 'address' ? 'block' : 'none';
+  document.getElementById('painel-coords').style.display  = modo === 'coords'  ? 'block' : 'none';
+
+  // Ativa GPS automaticamente ao selecionar esse modo
+  if (modo === 'gps' && !_locObtida) obterLocalizacao();
+}
+
+// ── Obter localização via GPS ─────────────────────────────────────────────
+async function obterLocalizacao() {
+  const status   = document.getElementById('loc-status');
+  const address  = document.getElementById('loc-address');
+  const precisao = document.getElementById('loc-precisao');
+  const precVal  = document.getElementById('loc-precisao-val');
+  const btnAtual = document.getElementById('btn-atualizar-loc');
+
+  if (!navigator.geolocation) {
+    status.textContent = '⚠️ Geolocalização não suportada neste navegador.';
+    status.style.color = 'var(--laranja)';
+    return;
+  }
+
+  status.textContent = '⏳ Detectando localização...';
+  status.style.color = 'var(--muted)';
+  address.textContent = '';
+  btnAtual.disabled = true;
+
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const acc = Math.round(pos.coords.accuracy);
+
+      document.getElementById('origin_lat').value = lat;
+      document.getElementById('origin_lng').value = lng;
+
+      status.textContent = '✔ Localização obtida';
+      status.style.color = '#7fff90';
+      precVal.textContent = acc;
+      precisao.style.display = 'block';
+      btnAtual.disabled = false;
+      _locObtida = true;
+
+      // Geocodificação reversa via Nominatim
+      try {
+        const resp = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=pt`,
+          { headers: { 'Accept-Language': 'pt' } }
+        );
+        const data = await resp.json();
+        address.textContent = (data && data.display_name)
+          ? data.display_name
+          : `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      } catch {
+        address.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      }
+    },
+    (err) => {
+      btnAtual.disabled = false;
+      const msgs = {
+        1: 'Permissão negada — permita acesso à localização no navegador.',
+        2: 'Localização indisponível no momento.',
+        3: 'Tempo esgotado ao obter localização.',
+      };
+      status.textContent = '⚠️ ' + (msgs[err.code] || 'Erro ao obter localização.');
+      status.style.color = 'var(--laranja)';
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+  );
+}
+
+// ── Limpar formulário ─────────────────────────────────────────────────────
+function limparForm() {
+  document.getElementById('addresses').value = '';
+  document.getElementById('aviso-sem-loc').style.display = 'none';
+  document.getElementById('origin_address_text').value = '';
+  document.getElementById('origin_coord_lat').value = '';
+  document.getElementById('origin_coord_lng').value = '';
+}
+
+// ── Validação no submit ───────────────────────────────────────────────────
+document.getElementById('form-rota').addEventListener('submit', function(e) {
+  const modo = _modoAtual;
+
+  if (modo === 'gps' && !_locObtida) {
+    document.getElementById('aviso-sem-loc').style.display = 'block';
+  }
+
+  if (modo === 'address') {
+    const txt = document.getElementById('origin_address_text').value.trim();
+    if (!txt) {
+      e.preventDefault();
+      document.getElementById('origin_address_text').focus();
+      return;
+    }
+  }
+
+  if (modo === 'coords') {
+    const lat = document.getElementById('origin_coord_lat').value;
+    const lng = document.getElementById('origin_coord_lng').value;
+    if (!lat || !lng) {
+      e.preventDefault();
+      document.getElementById(lat ? 'origin_coord_lng' : 'origin_coord_lat').focus();
+      return;
+    }
+  }
+
+  document.getElementById('btn-gerar').disabled = true;
+  document.getElementById('btn-gerar').textContent = '⏳ Processando...';
+  document.getElementById('loading-msg').style.display = 'inline';
+});
+
+// Solicita GPS automaticamente ao carregar
+window.addEventListener('load', obterLocalizacao);
+</script>
+{% endblock %}

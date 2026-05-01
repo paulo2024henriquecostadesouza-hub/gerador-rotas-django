@@ -1,0 +1,69 @@
+{% extends 'routes/base.html' %}
+{% load static %}
+
+{% block title %}Histórico de Rotas — CCO{% endblock %}
+
+{% block content %}
+
+<div class="header-card">
+  <div>
+    <div class="header-title">📋 Histórico de Rotas</div>
+    <div class="header-sub">Últimas rotas geradas no sistema</div>
+  </div>
+  <a href="{% url 'routes:index' %}" class="btn-primary" style="text-decoration:none">➕ Nova Rota</a>
+</div>
+
+<div class="ciclo-panel">
+  {% if sessions %}
+  <div class="tabela-wrap">
+    <table class="tabela-est">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Data/Hora</th>
+          <th>Partida</th>
+          <th>Paradas</th>
+          <th>Distância</th>
+          <th>Tempo</th>
+          <th>Custo</th>
+          <th>Status</th>
+          <th>Ação</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in sessions %}
+        <tr>
+          <td><code style="color:var(--laranja)">{{ s.id|stringformat:"s"|slice:":8"|upper }}</code></td>
+          <td>{{ s.created_at|date:"d/m/Y H:i" }}</td>
+          <td style="text-align:left;max-width:180px;overflow:hidden;text-overflow:ellipsis">
+            {{ s.origin_address|default:"—"|truncatechars:30 }}
+          </td>
+          <td>{{ s.points.count }}</td>
+          <td>{% if s.total_distance_km %}{{ s.total_distance_km }} km{% else %}—{% endif %}</td>
+          <td>{% if s.total_duration_min %}{{ s.total_duration_min|floatformat:0 }} min{% else %}—{% endif %}</td>
+          <td>{% if s.fuel_cost %}R$ {{ s.fuel_cost|floatformat:2 }}{% else %}—{% endif %}</td>
+          <td>
+            {% if s.is_optimized %}
+              <span style="color:#7fff90;font-size:.8rem">✔ Otimizada</span>
+            {% else %}
+              <span style="color:var(--muted);font-size:.8rem">— Não otimizada</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="{% url 'routes:session_detail' s.id %}" class="btn-secondary" style="text-decoration:none;padding:4px 12px;font-size:.8rem">
+              Ver
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="hint" style="text-align:center;padding:24px 0">
+    Nenhuma rota gerada ainda. <a href="{% url 'routes:index' %}" style="color:var(--laranja)">Criar a primeira rota →</a>
+  </p>
+  {% endif %}
+</div>
+
+{% endblock %}

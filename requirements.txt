@@ -1,0 +1,20 @@
+# Django
+Django>=4.2,<5.0
+python-decouple>=3.8
+
+# Geocodificação gratuita (OpenStreetMap / Nominatim)
+geopy>=2.4
+
+# Mapas (geração de HTML para embed)
+folium>=0.15
+
+# Otimização de Rotas
+ortools>=9.7
+
+# PDF Export
+reportlab>=4.1
+Pillow>=10.2
+
+# Utilitários
+requests>=2.31
+python-dotenv>=1.0

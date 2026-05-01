@@ -1,0 +1,25 @@
+# Ambiente
+.env
+venv/
+env/
+.venv/
+
+# Django
+db.sqlite3
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+migrations/__pycache__/
+
+# Arquivos gerados
+*.log
+staticfiles/
+media/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
